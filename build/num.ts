@@ -1,1 +1,1 @@
-export const num = "ok boomer"
+export const num = 1234
