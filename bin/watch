@@ -3,10 +3,11 @@
 // Copied and adapted from https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API#writing-an-incremental-program-watcher
 
 const cp = require("node:child_process")
+const fs = require("node:fs/promises")
 const ts = require("typescript")
 
 const COMPILE_TIMER_LABEL = "Compiling build script took"
-const LOG_PREFIX = "[watch-build]"
+const LOG_PREFIX = "\033[31m[watch-build]\033[m"
 const WANT_OUTPUT = ["1", "true"].includes(
 	process.env.WATCH_BUILD_OUTPUT
 )
@@ -14,6 +15,10 @@ const WANT_OUTPUT = ["1", "true"].includes(
 /** @type Map<string, Function> */
 const signalListeners = new Map()
 
+/** @type Set<string> */
+let filesEmittedInLastRun = new Set()
+/** @type Set<string> */
+let filesEmittedInRunBeforeLastRun = new Set()
 let hasDiagnostics = false
 /** @type string | undefined */
 let killedBy = undefined
@@ -42,6 +47,20 @@ function timeEnd(label) {
 	if (WANT_OUTPUT) console.timeEnd(`${LOG_PREFIX} ${label}`)
 }
 
+function handleNodeProcessExit() {
+	const p = nodeProcess
+	if (!p) return
+
+	const msg = ["Build process exited with"]
+	if (p.exitCode) {
+		msg.push("status", p.exitCode)
+	} else {
+		msg.push("signal", p.signalCode)
+	}
+
+	;(p.exitCode === 0 ? info : error)(...msg)
+}
+
 function stopWatching() {
 	if (watcher) {
 		watcher.close()
@@ -58,9 +77,16 @@ const formatHost = {
 	getNewLine: () => ts.sys.newLine,
 }
 
-function watchMain() {
+async function watchMain() {
+	const outDir = `${process.cwd()}/_build`
+	if ((await fs.lstat(outDir)).isDirectory()) {
+		await fs.rm(outDir, {
+			recursive: true,
+		})
+	}
+
 	const entrySrc = `${process.cwd()}/build/index.ts`
-	const entryCompiled = `${process.cwd()}/_build/index.js`
+	const entryCompiled = `${outDir}/index.js`
 
 	const configPath = ts.findConfigFile(
 		process.cwd(),
@@ -94,7 +120,13 @@ function watchMain() {
 		{
 			outDir: `${process.cwd()}/_build`,
 		},
-		ts.sys,
+		{
+			...ts.sys,
+			writeFile(path, data, writeBOM) {
+				filesEmittedInLastRun.add(path)
+				ts.sys.writeFile(path, data, writeBOM)
+			},
+		},
 		createProgram,
 		reportDiagnostic,
 		reportWatchStatusChanged
@@ -112,18 +144,68 @@ function watchMain() {
 	}
 	const origPostProgramCreate = host.afterProgramCreate
 
-	host.afterProgramCreate = program => {
-		timeEnd(COMPILE_TIMER_LABEL)
+	host.afterProgramCreate = async program => {
 		origPostProgramCreate(program)
 
+		// const srcDeps = program
+		// 	.getProgram()
+		// 	.getRootFileNames()
+		// 	.map(program.getSourceFile)
+		// 	.flatMap(program.getAllDependencies)
+		// 	.filter(f => !f.startsWith(`${process.cwd()}/node_modules/`))
+		// 	.map(f => f.split("/"))
+		// let commonPrefix = srcDeps[0]
+		// srcDeps.slice(1).forEach(f => {
+		// 	for (let i = 0; i < f.length; i++) {
+		// 		const segment = f[i]
+		// 		if (segment !== commonPrefix[i]) {
+		// 			commonPrefix = commonPrefix.slice(0, i)
+		// 			break
+		// 		}
+		// 	}
+		// })
+
+		// let fileToLoad
+		// if (commonPrefix.at(-1) === "build.ts") {
+		// 	fileToLoad = [...commonPrefix.slice(0, -1), "build.js"]
+		// } else if (
+		// 	commonPrefix.at(-2) === "build" &&
+		// 	commonPrefix.at(-1) === "index.ts"
+		// ) {
+		// 	fileToLoad = [...commonPrefix.slice(0, -2), "build/index.js"]
+		// }
+
+		filesEmittedInLastRun.forEach(f =>
+			filesEmittedInRunBeforeLastRun.delete(f)
+		)
+		const deleteFilesPromise = Promise.all(
+			[...filesEmittedInRunBeforeLastRun].map(f => {
+				// console.log("unlinking", f)
+				fs.unlink(f)
+			})
+		)
+		filesEmittedInRunBeforeLastRun = filesEmittedInLastRun
+		filesEmittedInLastRun = new Set()
+
+		timeEnd(COMPILE_TIMER_LABEL)
+
 		if (nodeProcess) {
+			nodeProcess.removeListener("exit", handleNodeProcessExit)
 			nodeProcess.kill()
 		}
 		if (!hasDiagnostics) {
-			nodeProcess = cp.spawn("node", [entryCompiled], {
-				stdio: "inherit",
-			})
+			nodeProcess = cp.spawn(
+				"node",
+				// [[process.cwd(), "_build", fileToLoad]],
+				[entryCompiled],
+				{
+					stdio: "inherit",
+				}
+			)
+			nodeProcess.on("exit", handleNodeProcessExit)
 		}
+
+		await deleteFilesPromise
 	}
 
 	// `createWatchProgram` creates an initial program, watches files, and updates
@@ -152,11 +234,10 @@ function reportWatchStatusChanged(diagnostic) {
 	info(ts.formatDiagnostic(diagnostic, formatHost).trim())
 }
 
-// Forward signals to child process.
-// NOTE: The list of signals is incomplete.
 ;["SIGINT", "SIGTERM"].forEach(signal => {
 	const listener = () => {
 		killedBy = signal
+		stopWatching()
 		if (nodeProcess) {
 			nodeProcess.kill(signal)
 		}
@@ -165,26 +246,25 @@ function reportWatchStatusChanged(diagnostic) {
 	process.on(signal, listener)
 })
 
-process.on("SIGINT", stopWatching)
-process.on("SIGTERM", stopWatching)
-
 watchMain()
 
+function exit() {
+	if (!killedBy) {
+		throw new Error("Illegal state: exit without kill signal")
+	}
+	info("Exiting due to", killedBy)
+	process.removeListener(killedBy, signalListeners.get(killedBy))
+	process.kill(process.pid, killedBy)
+}
+
 watcherPromise.finally(() => {
-	// If we exited by signal, uninstall our signal handler and kill this
-	// process with the signal that killed the child. That way, we
-	// forward the signal to the parent process (e.g. a shell) correctly.
-	if (nodeProcess) {
-		console.log("nope")
-		nodeProcess.once("exit", () => {
-			if (killedBy) {
-				signalListeners.forEach((v, k) => {
-					process.removeListener(k, v)
-				})
-				process.kill(process.pid, killedBy)
-			} else {
-				process.exit(nodeProcess.exitCode)
-			}
-		})
+	if (
+		nodeProcess &&
+		nodeProcess.exitCode === null &&
+		nodeProcess.signalCode === null
+	) {
+		nodeProcess.once("exit", () => exit())
+	} else {
+		exit()
 	}
 })
