@@ -3,15 +3,26 @@ import * as handlebars from "handlebars"
 import { num } from "./num"
 import * as x from "./x.json"
 
-export default function main() {   
-    const w = fs.watch("components", (type, file) => {
-        console.log(type, file)
-    })
+function buildStuff() {
+    const hb = handlebars.create()
+
+    hb.registerPartial("x", hb.compile(fs.readFileSync("components/x.hbs", "utf-8")))
     
-    console.log(handlebars.compile("foo {{h}} {{i}}")({
+    console.log(hb.compile("foo {{h}} {{i}} {{#> x}}This is my block!{{/x}}")({
         h: num,
         i: x.foo,
     }))
+}
+
+export default function main() {
+    console.log("end", new Date())
+
+    buildStuff()
+
+    const w = fs.watch("components", (type, file) => {
+        console.log(type, file)
+        buildStuff()
+    })
 
     return () => {
         console.log("close!")
@@ -31,4 +42,6 @@ function exit(signal: string) {
     process.on(signal, handler)
 }
 
-["SIGINT", "SIGTERM"].forEach(signal => exit(signal))
+process.on("buildscript-failure", console.log)
+
+;["SIGINT", "SIGTERM"].forEach(signal => exit(signal))

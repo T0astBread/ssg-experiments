@@ -24,6 +24,8 @@ let hasDiagnostics = false
 let killedBy = undefined
 /** @type cp.ChildProcess | undefined */
 let nodeProcess = undefined
+/** @type cp.ChildProcess | undefined */
+let nodeProcessStandby = undefined
 let watcher = undefined
 /** @type Function | undefined */
 let watcherPromiseResolve = undefined
@@ -45,6 +47,12 @@ function time(label) {
 
 function timeEnd(label) {
 	if (WANT_OUTPUT) console.timeEnd(`${LOG_PREFIX} ${label}`)
+}
+
+function spawnNodeProcess() {
+	return cp.fork(`${process.cwd()}/bin/watch-prelude`, {
+		stdio: "inherit",
+	})
 }
 
 function handleNodeProcessExit() {
@@ -78,6 +86,8 @@ const formatHost = {
 }
 
 async function watchMain() {
+	nodeProcessStandby = spawnNodeProcess()
+
 	const outDir = `${process.cwd()}/_build`
 	if ((await fs.lstat(outDir)).isDirectory()) {
 		await fs.rm(outDir, {
@@ -138,6 +148,7 @@ async function watchMain() {
 	// doesn't use `this` at all.
 	const origCreateProgram = host.createProgram
 	host.createProgram = (_rootNames, options, host, oldProgram) => {
+		console.log("start", new Date())
 		time(COMPILE_TIMER_LABEL)
 		hasDiagnostics = false
 		return origCreateProgram([entrySrc], options, host, oldProgram)
@@ -146,34 +157,6 @@ async function watchMain() {
 
 	host.afterProgramCreate = async program => {
 		origPostProgramCreate(program)
-
-		// const srcDeps = program
-		// 	.getProgram()
-		// 	.getRootFileNames()
-		// 	.map(program.getSourceFile)
-		// 	.flatMap(program.getAllDependencies)
-		// 	.filter(f => !f.startsWith(`${process.cwd()}/node_modules/`))
-		// 	.map(f => f.split("/"))
-		// let commonPrefix = srcDeps[0]
-		// srcDeps.slice(1).forEach(f => {
-		// 	for (let i = 0; i < f.length; i++) {
-		// 		const segment = f[i]
-		// 		if (segment !== commonPrefix[i]) {
-		// 			commonPrefix = commonPrefix.slice(0, i)
-		// 			break
-		// 		}
-		// 	}
-		// })
-
-		// let fileToLoad
-		// if (commonPrefix.at(-1) === "build.ts") {
-		// 	fileToLoad = [...commonPrefix.slice(0, -1), "build.js"]
-		// } else if (
-		// 	commonPrefix.at(-2) === "build" &&
-		// 	commonPrefix.at(-1) === "index.ts"
-		// ) {
-		// 	fileToLoad = [...commonPrefix.slice(0, -2), "build/index.js"]
-		// }
 
 		filesEmittedInLastRun.forEach(f =>
 			filesEmittedInRunBeforeLastRun.delete(f)
@@ -189,20 +172,24 @@ async function watchMain() {
 
 		timeEnd(COMPILE_TIMER_LABEL)
 
-		if (nodeProcess) {
-			nodeProcess.removeListener("exit", handleNodeProcessExit)
-			nodeProcess.kill()
-		}
-		if (!hasDiagnostics) {
-			nodeProcess = cp.spawn(
-				"node",
-				// [[process.cwd(), "_build", fileToLoad]],
-				[entryCompiled],
-				{
-					stdio: "inherit",
-				}
-			)
+		if (hasDiagnostics) {
+			nodeProcess.send({
+				event: "buildscript-failure",
+				data: "Fail :<",
+			})
+		} else {
+			if (nodeProcess) {
+				nodeProcess.removeListener("exit", handleNodeProcessExit)
+				nodeProcess.kill()
+			}
+
+			nodeProcess = nodeProcessStandby
 			nodeProcess.on("exit", handleNodeProcessExit)
+			nodeProcess.send({
+				event: "start",
+				data: entryCompiled,
+			})
+			nodeProcessStandby = spawnNodeProcess()
 		}
 
 		await deleteFilesPromise
@@ -241,6 +228,9 @@ function reportWatchStatusChanged(diagnostic) {
 		if (nodeProcess) {
 			nodeProcess.kill(signal)
 		}
+		if (nodeProcessStandby) {
+			nodeProcessStandby.kill()
+		}
 	}
 	signalListeners.set(signal, listener)
 	process.on(signal, listener)
@@ -257,14 +247,25 @@ function exit() {
 	process.kill(process.pid, killedBy)
 }
 
-watcherPromise.finally(() => {
+/**
+ * @param {cp.ChildProcess | undefined} nodeProcess
+ */
+function waitForNodeToExit(nodeProcess) {
 	if (
 		nodeProcess &&
 		nodeProcess.exitCode === null &&
 		nodeProcess.signalCode === null
 	) {
-		nodeProcess.once("exit", () => exit())
+		return new Promise(r => {
+			nodeProcess.once("exit", r)
+		})
 	} else {
-		exit()
+		return Promise.resolve()
 	}
-})
+}
+
+Promise.all([
+	watcherPromise,
+	waitForNodeToExit(nodeProcess),
+	waitForNodeToExit(nodeProcessStandby),
+]).finally(() => exit())
