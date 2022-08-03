@@ -5,22 +5,14 @@ const log = withPrefix(`${ansi(2)}[sse]${ansi()}`)
 
 async function sendEvent(connection: http.ServerResponse, event: string, data: any) {
     log.debug("Sending event:", event)
-    // connection.cork()
-    try {
-        await Promise.race([
-            // new Promise((_resolve, reject) => {
-            //     connection.once("close", reject)
-            // }),
-            new Promise((resolve, reject) => {
-                connection.write(`event: ${event}
+    await Promise.race([
+        new Promise((resolve, reject) => {
+            connection.write(`event: ${event}
 data: ${data}
 
 `, err => (err ? reject : resolve)(err))
-            }),
-        ])
-    } finally {
-        // connection.uncork()
-    }
+        }),
+    ])
 }
 
 export class EventServer {
@@ -48,8 +40,6 @@ export class EventServer {
         httpResponse.once("close", () => {
             this.connections.delete(id)
         })
-        // httpResponse.removeHeader("Connection")
-        // httpResponse.removeHeader("Transfer-Encoding")
         httpResponse.writeHead(200, {
             "Content-Type": "text/event-stream",
         })
@@ -83,9 +73,7 @@ export class EventServer {
         log.debug("Closing...")
 
         return Promise.all([...this.connections.values()].map(connection => {
-            // connection.removeAllListeners("close")
             return new Promise(resolve => connection.end(resolve))
         }))
-        // this.connections.forEach(c => c.destroy())
     }
 }

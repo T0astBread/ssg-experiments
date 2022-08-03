@@ -2,7 +2,7 @@
 	"name": "site-custom",
 	"bin": "./bin",
 	"scripts": {
-		"watch": "bin/watch"
+		"watch": "node ./watch-build"
 	},
 	"dependencies": {
 		"handlebars": "^4.7.7"

@@ -118,19 +118,19 @@ const server = http.createServer(async (request, response) => {
     } else if (request.url === "/evt") {
         const sendEvent = eventServer.startSending(response)
 
-        const interval = setInterval(() => {
-            log.debug("Sending event")
-            if (response.closed) {
-                log.debug("Sending event - closed!")
-                clearInterval(interval)
-                return
-            }
-            sendEvent("something", "hi from the server!")
-        }, 500)
-        response.once("close", () => {
-            log.debug("Stopping events - closed")
-            clearInterval(interval)
-        })
+        // const interval = setInterval(() => {
+        //     log.debug("Sending event")
+        //     if (response.closed) {
+        //         log.debug("Sending event - closed!")
+        //         clearInterval(interval)
+        //         return
+        //     }
+        //     sendEvent("something", "hi from the server!")
+        // }, 500)
+        // response.once("close", () => {
+        //     log.debug("Stopping events - closed")
+        //     clearInterval(interval)
+        // })
     } else {
         response.writeHead(404, "Not Found")
         response.end()
@@ -143,7 +143,6 @@ cleanup.register(async () => {
             server.on("request", (_request, response) => response.destroy())
             server.close((err) => (err ? reject : resolve)(err))
         })
-        // server.closeAllConnections()
         await closePromise
         log.debug("Stopped server")
     } else {
@@ -158,11 +157,6 @@ cleanup.register(() => {
 
 log.debug("Starting server...")
 server.listen(8080)
-// const fakeDelay = setTimeout(() => {
-//     server.listen(8080)
-//     log.debug("HELOOOOOO")
-// }, 3000)
-// cleanup.register(() => clearTimeout(fakeDelay))
 log.info("Started server")
 
 process.on("buildscript-compile", async data => {

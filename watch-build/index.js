@@ -33,6 +33,10 @@ let watcherPromise = new Promise(r => {
 	watcherPromiseResolve = r
 })
 
+function debug(...args) {
+	if (wantsVerboseOutput) console.debug(LOG_PREFIX, ...args)
+}
+
 function error(...args) {
 	console.error(LOG_PREFIX, ...args)
 }
@@ -50,23 +54,24 @@ function timeEnd(label) {
 }
 
 function spawnNodeProcess() {
-	return cp.fork(`${process.cwd()}/bin/watch-prelude`, {
+	return cp.fork(`${__dirname}/prelude`, {
 		stdio: "inherit",
 	})
 }
 
-function handleNodeProcessExit() {
-	const p = nodeProcess
-	if (!p) return
+function handleNodeProcessExit(nodeProcess) {
+	return () => {
+		if (!nodeProcess) return
 
-	const msg = ["Build process exited with"]
-	if (p.exitCode) {
-		msg.push("status", p.exitCode)
-	} else {
-		msg.push("signal", p.signalCode)
+		const msg = ["Build process exited with"]
+		if (nodeProcess.exitCode) {
+			msg.push("status", nodeProcess.exitCode)
+		} else {
+			msg.push("signal", nodeProcess.signalCode)
+		}
+
+		;(nodeProcess.exitCode === 0 ? info : error)(...msg)
 	}
-
-	;(p.exitCode === 0 ? info : error)(...msg)
 }
 
 function stopWatching() {
@@ -170,7 +175,7 @@ async function watchMain() {
 		)
 		const deleteFilesPromise = Promise.all(
 			[...filesEmittedInRunBeforeLastRun].map(f => {
-				// console.log("unlinking", f)
+				debug("Unlinking", f)
 				fs.unlink(f)
 			})
 		)
@@ -180,17 +185,19 @@ async function watchMain() {
 		timeEnd(COMPILE_TIMER_LABEL)
 
 		if (hasDiagnostics) {
-			nodeProcess.send({
-				event: "buildscript-failure",
-				data: "Fail :<",
-			})
+			if (nodeProcess && nodeProcess.connected) {
+				nodeProcess.send({
+					event: "buildscript-failure",
+					data: "Fail :<",
+				})
+			}
 		} else {
 			const exitPromise = (async () => {
 				const np = nodeProcess
-				if (!np) {
+				if (!np || !np.connected) {
 					return
 				}
-				np.removeListener("exit", handleNodeProcessExit)
+				np.removeListener("exit", handleNodeProcessExit(np))
 				const politeExitPromise = new Promise(r => np.once("exit", r))
 				np.kill("SIGUSR2")
 				const hitTimeout = await Promise.race([
@@ -206,29 +213,13 @@ async function watchMain() {
 					await killExitPromise
 				}
 			})()
-			// const exitPromise = new Promise(r => {
-			// 	if (nodeProcess) {
-			// 		nodeProcess.removeListener("exit", handleNodeProcessExit)
-			// 		const innerExitPromise = new Promise(r => nodeProcess.once("exit", r))
-			// 		nodeProcess.kill("SIGUSR2")
-			// 		Promise.race([
-			// 			innerExitPromise.then(() => false),
-			// 			new Promise(r => setTimeout(() => r(true), 5000))
-			// 		]).then(hitTimeout => {
-			// 			if (hitTimeout) {
-			// 				nodeProcess.kill("SIGKILL")
-			// 			}
-			// 		})
-			// 	} else {
-			// 		r()
-			// 	}
-			// })
 
-			nodeProcess = nodeProcessStandby
-			nodeProcess.on("exit", handleNodeProcessExit)
-			nodeProcess.on("error", handleNodeProcessExit)
+			const np = nodeProcessStandby
+			np.on("exit", handleNodeProcessExit(np))
+			np.on("error", handleNodeProcessExit(np))
+			nodeProcess = np
 			await exitPromise
-			nodeProcess.send({
+			np.send({
 				event: "start",
 				data: entryCompiled,
 			})
