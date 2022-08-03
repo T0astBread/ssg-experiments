@@ -1,7 +1,7 @@
 import * as http from "node:http"
-import { withPrefix } from "./log"
+import { ansi, withPrefix } from "./log"
 
-const log = withPrefix("[sse]")
+const log = withPrefix(`${ansi(2)}[sse]${ansi()}`)
 
 async function sendEvent(connection: http.ServerResponse, event: string, data: any) {
     log.debug("Sending event:", event)

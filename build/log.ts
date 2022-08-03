@@ -1,4 +1,10 @@
-export const PREFIX = "[build]"
+const esc = String.fromCharCode(0o33)
+
+export function ansi(code?: number): string {
+    return `${esc}[${code ?? ""}m`
+}
+
+export const PREFIX = `${ansi(2)}[build-${process.pid}]${ansi()}`
 
 const wantsVerboseOutput = ["1", "true"].includes(process.env.VERBOSE_BUILD || "")
 
@@ -8,8 +14,7 @@ export function debug(...args: any[]) {
 }
 
 export function info(...args: any[]) {
-    if (wantsVerboseOutput)
-        console.info(PREFIX, ...args)
+    console.info(PREFIX, ...args)
 }
 
 export function error(...args: any[]) {

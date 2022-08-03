@@ -7,7 +7,7 @@ const fs = require("node:fs/promises")
 const ts = require("typescript")
 
 const COMPILE_TIMER_LABEL = "Compiling build script took"
-const LOG_PREFIX = "\033[31m[watch-build]\033[m"
+const LOG_PREFIX = "\033[34m[watch-build]\033[m"
 
 /** @type Map<string, Function> */
 const signalListeners = new Map()
@@ -38,7 +38,7 @@ function error(...args) {
 }
 
 function info(...args) {
-	if (wantsVerboseOutput) console.info(LOG_PREFIX, ...args)
+	console.info(LOG_PREFIX, ...args)
 }
 
 function time(label) {

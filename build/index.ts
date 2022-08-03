@@ -9,9 +9,9 @@ import * as handlebars from "handlebars"
 
 const startTime = new Date()
 const cleanup = new CleanupHandler()
-log.debug("Hi!")
+log.info("Hi!")
 cleanup.register(() => {
-    log.debug("Goodbye!")
+    log.info("Goodbye!")
     log.debug()
 })
 
@@ -29,7 +29,6 @@ let pages = buildHB()
 
 log.debug("Starting watcher...")
 const watcher = syncfs.watch("components", async (type, file) => {
-    console.log(type, file)
     pages = buildHB()
     await eventServer.broadcast("reload", null)
 })
@@ -86,6 +85,9 @@ const server = http.createServer(async (request, response) => {
                 })
                 evts.addEventListener("something", evt => {
                     console.log(evt.data)
+                    const p = document.createElement("p")
+                    p.innerText = evt.data
+                    document.body.appendChild(p)
                 })
                 evts.addEventListener("refresh", async () => {
                     evts.close()
