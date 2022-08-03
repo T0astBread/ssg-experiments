@@ -7,7 +7,6 @@ import * as sse from "./sse"
 import { CleanupHandler } from "./cleanup"
 import * as handlebars from "handlebars"
 import { marked } from "marked"
-import * as event from "node:events"
 
 const startTime = new Date()
 
