@@ -3,6 +3,7 @@ process.on("message", ({ event, data }) => {
 		case "start":
 			require(data)
 			break
+		case "buildscript-compile":
 		case "buildscript-failure":
 			process.emit(event, data)
 			break

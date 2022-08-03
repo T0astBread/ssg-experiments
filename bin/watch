@@ -8,12 +8,12 @@ const ts = require("typescript")
 
 const COMPILE_TIMER_LABEL = "Compiling build script took"
 const LOG_PREFIX = "\033[31m[watch-build]\033[m"
-const WANT_OUTPUT = ["1", "true"].includes(
-	process.env.WATCH_BUILD_OUTPUT
-)
 
 /** @type Map<string, Function> */
 const signalListeners = new Map()
+const wantsVerboseOutput = ["1", "true"].includes(
+	process.env.VERBOSE_WATCH_BUILD
+)
 
 /** @type Set<string> */
 let filesEmittedInLastRun = new Set()
@@ -38,15 +38,15 @@ function error(...args) {
 }
 
 function info(...args) {
-	if (WANT_OUTPUT) console.info(LOG_PREFIX, ...args)
+	if (wantsVerboseOutput) console.info(LOG_PREFIX, ...args)
 }
 
 function time(label) {
-	if (WANT_OUTPUT) console.time(`${LOG_PREFIX} ${label}`)
+	if (wantsVerboseOutput) console.time(`${LOG_PREFIX} ${label}`)
 }
 
 function timeEnd(label) {
-	if (WANT_OUTPUT) console.timeEnd(`${LOG_PREFIX} ${label}`)
+	if (wantsVerboseOutput) console.timeEnd(`${LOG_PREFIX} ${label}`)
 }
 
 function spawnNodeProcess() {
@@ -148,9 +148,16 @@ async function watchMain() {
 	// doesn't use `this` at all.
 	const origCreateProgram = host.createProgram
 	host.createProgram = (_rootNames, options, host, oldProgram) => {
-		console.log("start", new Date())
 		time(COMPILE_TIMER_LABEL)
 		hasDiagnostics = false
+
+		if (nodeProcess) {
+			nodeProcess.send({
+				event: "buildscript-compile",
+				data: "Compiling...",
+			})
+		}
+
 		return origCreateProgram([entrySrc], options, host, oldProgram)
 	}
 	const origPostProgramCreate = host.afterProgramCreate
@@ -178,13 +185,49 @@ async function watchMain() {
 				data: "Fail :<",
 			})
 		} else {
-			if (nodeProcess) {
-				nodeProcess.removeListener("exit", handleNodeProcessExit)
-				nodeProcess.kill("SIGUSR2")
-			}
+			const exitPromise = (async () => {
+				const np = nodeProcess
+				if (!np) {
+					return
+				}
+				np.removeListener("exit", handleNodeProcessExit)
+				const politeExitPromise = new Promise(r => np.once("exit", r))
+				np.kill("SIGUSR2")
+				const hitTimeout = await Promise.race([
+					politeExitPromise.then(() => false),
+					new Promise(r => setTimeout(() => r(true), 5000)),
+				])
+				if (hitTimeout) {
+					error(
+						"Build process did not finish after polite exit signal - sending SIGKILL"
+					)
+					const killExitPromise = new Promise(r => np.once("exit", r))
+					np.kill("SIGKILL")
+					await killExitPromise
+				}
+			})()
+			// const exitPromise = new Promise(r => {
+			// 	if (nodeProcess) {
+			// 		nodeProcess.removeListener("exit", handleNodeProcessExit)
+			// 		const innerExitPromise = new Promise(r => nodeProcess.once("exit", r))
+			// 		nodeProcess.kill("SIGUSR2")
+			// 		Promise.race([
+			// 			innerExitPromise.then(() => false),
+			// 			new Promise(r => setTimeout(() => r(true), 5000))
+			// 		]).then(hitTimeout => {
+			// 			if (hitTimeout) {
+			// 				nodeProcess.kill("SIGKILL")
+			// 			}
+			// 		})
+			// 	} else {
+			// 		r()
+			// 	}
+			// })
 
 			nodeProcess = nodeProcessStandby
 			nodeProcess.on("exit", handleNodeProcessExit)
+			nodeProcess.on("error", handleNodeProcessExit)
+			await exitPromise
 			nodeProcess.send({
 				event: "start",
 				data: entryCompiled,
