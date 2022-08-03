@@ -180,7 +180,7 @@ async function watchMain() {
 		} else {
 			if (nodeProcess) {
 				nodeProcess.removeListener("exit", handleNodeProcessExit)
-				nodeProcess.kill()
+				nodeProcess.kill("SIGUSR2")
 			}
 
 			nodeProcess = nodeProcessStandby
