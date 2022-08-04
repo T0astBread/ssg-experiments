@@ -10,7 +10,7 @@
 			"name": "Launch Program",
 			"skipFiles": ["<node_internals>/**"],
 			"autoAttachChildProcesses": true,
-			"program": "${workspaceFolder}/bin/watch",
+			"program": "${workspaceFolder}/watch-build",
 			"killBehavior": "polite"
 		}
 	]

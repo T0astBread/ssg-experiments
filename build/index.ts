@@ -128,6 +128,7 @@ function resolvePath(requestURL: string | undefined) {
         case "/":
             return "index.html"
         default:
+            requestURL = requestURL?.replace(/(?:\/|\.html)$/, "")
             return requestURL.substring(1) + ".html"
     }
 }
@@ -135,11 +136,20 @@ function resolvePath(requestURL: string | undefined) {
 const server = http.createServer(async (request, response) => {
     log.debug("Serving", request.method, request.url)
 
-    if (request.url === "/start-time") {
+    if (request.url !== "/" && request.url?.endsWith("/")) {
+        response.writeHead(301, {
+            "Location": request.url.substring(0, request.url.length - 1),
+        })
+        response.end()
+    } else if (request.url?.endsWith(".html")) {
+        response.writeHead(301, {
+            "Location": request.url.substring(0, request.url.length - 5),
+        })
+        response.end()
+    } else if (request.url === "/start-time") {
         response.writeHead(200, {
             "Content-Type": "text/plain",
         })
-
         response.end(startTime.toJSON())
     } else if (request.url === "/evt") {
         void eventServer.startSending(response)

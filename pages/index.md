@@ -1,5 +1,7 @@
 # hey!
 
+[Other page](other)
+
 {{#> x}}
     also works
 
