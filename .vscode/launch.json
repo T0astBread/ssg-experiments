@@ -11,7 +11,10 @@
 			"skipFiles": ["<node_internals>/**"],
 			"autoAttachChildProcesses": true,
 			"program": "${workspaceFolder}/watch-build",
-			"killBehavior": "polite"
+			"killBehavior": "polite",
+			"env": {
+				"VERBOSE_BUILD": "1"
+			}
 		}
 	]
 }

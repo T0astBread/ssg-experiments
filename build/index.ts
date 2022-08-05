@@ -7,7 +7,11 @@ import * as sse from "./sse"
 import { CleanupHandler } from "./cleanup"
 import * as handlebars from "handlebars"
 import { marked } from "marked"
+import * as fsext from "./fs"
+import * as path from "node:path"
 
+const pagesPath = `${process.cwd()}/pages`
+const errorPagesPath = `${process.cwd()}/error-pages`
 const startTime = new Date()
 
 const watchClient = `
@@ -75,30 +79,128 @@ cleanup.register(() => {
     log.debug()
 })
 
-async function buildPages() {
+// interface PageEntry {
+//     readonly promise: Promise<string>,
+//     resolve?: (content: string | undefined) => void,
+// }
+
+// class Pages {
+//     private doneRendering = false
+//     private readonly pagePromises = new Map<string, PageEntry>()
+
+//     async get(path: string): Promise<string | undefined> {
+//         const entry = this.pagePromises.get(path)
+//         if (entry) {
+//             return entry.promise
+//         }
+//         if (this.doneRendering) {
+//             return undefined
+//         }
+//         const x = new Promise()
+//         this.pagePromises.set
+//     }
+
+//     add(path: string, content: Promise<string>) {
+//         if (this.doneRendering) {
+//             throw new Error("Add after rendering has been reported as done")
+//         }
+
+//         const existingEntry = this.pagePromises.get(path)
+//         if (existingEntry) {
+//             if (!existingEntry.resolve) {
+//                 throw new Error("Tried to add an existing page")
+//             }
+//             content.then(existingEntry.resolve)
+//             existingEntry.resolve = undefined
+//         } else {
+//             this.pagePromises.set(path, {
+//                 promise: content,
+//             })
+//         }
+//     }
+
+//     notifyDoneRendering() {
+//         this.doneRendering = true
+//         this.pagePromises.forEach(entry => {
+//             entry.resolve?.call(undefined, undefined)
+//             entry.resolve = undefined
+//         })
+//     }
+
+//     clear() {
+//         this.doneRendering = false
+//         ;[...this.pagePromises.entries()]
+//             .filter(([ _, entry ]) => entry.resolve === undefined)
+//             .forEach(([ path ]) => this.pagePromises.delete(path))
+//     }
+// }
+
+// async function buildPages(pages: Pages) {
+//     pages.clear()
+
+//     const hb = handlebars.create()
+//     const xSrc = await fs.readFile("components/x.hbs", "utf-8")
+//     hb.registerPartial("x", hb.compile(xSrc))
+
+//     const files = fsext.walk(`${process.cwd()}/pages`)
+//     for await (const file of files) {
+//         const path = file.path.replace(/\.md$/, "")
+//         pages.add(path, (async () => {
+//             const src = await fs.readFile(file.path, "utf-8")
+//             const md = hb.compile(src)({})
+//             const html = marked(md)
+//             return html
+//         })())
+//     }
+// }
+
+// const pages = new Pages()
+
+function filePathToPagePath(dir: string, filePath: string): string {
+    const relativePath = path.relative(dir, filePath).replace(/\.md$/, "")
+    if (relativePath === "index") {
+        return "/"
+    }
+    return `/${relativePath}`
+}
+
+async function buildPage(hb: typeof handlebars, filePath: string): Promise<string> {
+    const src = await fs.readFile(filePath, "utf-8")
+    const md = hb.compile(src)({})
+    const html = marked(md)
+    return html
+}
+
+async function buildPages(dir: string) {
+    const pages = new Map<string, Promise<string>>()
+
     const hb = handlebars.create()
     const xSrc = await fs.readFile("components/x.hbs", "utf-8")
     hb.registerPartial("x", hb.compile(xSrc))
 
-    const pageRenderPromises = (await fs.readdir("pages"))
-        .map(async fileName => {
-            const src = await fs.readFile(`${process.cwd()}/pages/${fileName}`, "utf-8")
-            const md = hb.compile(src)({})
-            const html = marked(md)
-            return {
-                [fileName.replace(/\.md$/, ".html")]: html,
-            }
-        })
+    const files = fsext.walk(dir)
+    for await (const file of files) {
+        const pathName = filePathToPagePath(dir, file.path)
+        log.debug("Building page", pathName)
+        pages.set(pathName, buildPage(hb, file.path))
+    }
 
-    return (await Promise.all(pageRenderPromises))
-        .reduce((a, b) => ({...a, ...b}), {})
+    return pages
 }
-let pages = buildPages()
+
+let pages = buildPages(pagesPath)
+let errorPages = buildPages(errorPagesPath)
 
 log.debug("Starting watcher...")
-function startWatching(dirName: string) {
+function startWatching(dirName: string, affectsPages: boolean, affectsErrorPages: boolean) {
     const watcher = syncfs.watch(dirName, async (type, file) => {
-        pages = buildPages()
+        if (affectsPages) {
+            pages = buildPages(pagesPath)
+        }
+        if (affectsErrorPages) {
+            errorPages = buildPages(errorPagesPath)
+        }
+        await pages
         await eventServer.broadcast("reload", null)
     })
     cleanup.register(() => {
@@ -107,8 +209,9 @@ function startWatching(dirName: string) {
         log.debug("Closed watcher")
     })
 }
-startWatching("components")
-startWatching("pages")
+startWatching("components", true, true)
+startWatching(pagesPath, true, false)
+startWatching(errorPagesPath, false, true)
 // const watcher = syncfs.watch("components", async (type, file) => {
 //     pages = buildPages()
 //     await eventServer.broadcast("reload", null)
@@ -122,16 +225,16 @@ log.info("Started watcher")
 
 const eventServer = new sse.EventServer()
 
-function resolvePath(requestURL: string | undefined) {
-    switch(requestURL) {
-        case undefined:
-        case "/":
-            return "index.html"
-        default:
-            requestURL = requestURL?.replace(/(?:\/|\.html)$/, "")
-            return requestURL.substring(1) + ".html"
-    }
-}
+// function resolvePath(requestURL: string | undefined) {
+//     switch(requestURL) {
+//         case undefined:
+//         case "/":
+//             return "index.html"
+//         default:
+//             requestURL = requestURL?.replace(/(?:\/|\.html)$/, "")
+//             return requestURL.substring(1)
+//     }
+// }
 
 const server = http.createServer(async (request, response) => {
     log.debug("Serving", request.method, request.url)
@@ -154,16 +257,20 @@ const server = http.createServer(async (request, response) => {
     } else if (request.url === "/evt") {
         void eventServer.startSending(response)
     } else {
-        // const url = new URL(request.url ?? "/")
-        const pathName = resolvePath(request.url)
-        log.debug("Resolved path", request.url, "to", pathName)
-        const page = (await pages)[pathName]
+        // const pathName = resolvePath(request.url)
+        // log.debug("Resolved path", request.url, "to", pathName)
+        const page = await (await pages).get(request.url ?? "/")
         if (page) {
-            response.writeHead(200, "Cool choice!")
+            response.writeHead(200, {
+                "Content-Type": "text/html;charset=utf-8",
+            })
             response.end(page + "\n\n" + watchClient)
         } else {
-            response.writeHead(404, "Not Found")
-            response.end(watchClient)
+            const errorPage = await (await errorPages).get("/404")
+            response.writeHead(404, {
+                "Content-Type": "text/html;charset=utf-8",
+            })
+            response.end(`${errorPage ?? ""}\n\n${watchClient}`)
         }
     }
 })
