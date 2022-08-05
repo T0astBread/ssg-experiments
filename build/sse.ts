@@ -15,6 +15,8 @@ data: ${data}
     ])
 }
 
+export type SendFn = (event: string, data: any) => Promise<void>
+
 export class EventServer {
     private _closed = false
     public get closed() {
@@ -27,7 +29,7 @@ export class EventServer {
     private nextID = 0
     private readonly connections = new Map<number, http.ServerResponse>()
 
-    startSending(httpResponse: http.ServerResponse) {
+    startSending(httpResponse: http.ServerResponse): SendFn {
         if (this.closed) {
             throw new Error("startSending after close")
         }
@@ -48,7 +50,7 @@ export class EventServer {
         return (event: string, data: any) => sendEvent(httpResponse, event, data)
     }
 
-    async broadcast(event: string, data: any) {
+    async broadcast(event: string, data?: any) {
         if (this.closed) {
             throw new Error("broadcast after close")
         }
